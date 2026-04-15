@@ -105,16 +105,44 @@ export const getAllCallLogs = async (
       return;
     }
 
-    const { search, to, callType } = req.query as {
+    const { search, callType, dateFilter, page, limit } = req.query as {
       search?: string;
-      to?: string;
-      callType?: CallType;
+      callType?: string;
+      dateFilter?: string;
+      page?: string;
+      limit?: string;
     };
 
-    if (callType && !Object.values(CallType).includes(callType)) {
+    const normalizedCallType = callType?.trim().toUpperCase();
+    if (
+      normalizedCallType &&
+      !Object.values(CallType).includes(normalizedCallType as CallType)
+    ) {
       sendError(res, 400, "callType must be INCOMING or OUTGOING");
       return;
     }
+
+    const normalizedDateFilter = dateFilter?.trim().toLowerCase() ?? "all";
+    if (!["all", "today"].includes(normalizedDateFilter)) {
+      sendError(res, 400, "dateFilter must be all or today");
+      return;
+    }
+
+    const pageNumber = Number(page ?? 1);
+    const limitNumber = Number(limit ?? 10);
+
+    if (
+      !Number.isInteger(pageNumber) ||
+      pageNumber < 1 ||
+      !Number.isInteger(limitNumber) ||
+      limitNumber < 1
+    ) {
+      sendError(res, 400, "page and limit must be positive integers");
+      return;
+    }
+
+    const safeLimit = Math.min(limitNumber, 100);
+    const skip = (pageNumber - 1) * safeLimit;
 
     const filters: Record<string, unknown> = {};
 
@@ -122,39 +150,70 @@ export const getAllCallLogs = async (
       filters.calledBy = req.user.sub;
     }
 
-    if (to?.trim()) {
-      filters.to = { $regex: escapeRegex(normalizeToNumber(to)), $options: "i" };
+    if (normalizedCallType) {
+      filters.callType = normalizedCallType;
     }
 
-    if (callType) {
-      filters.callType = callType;
+    if (normalizedDateFilter === "today") {
+      const startOfDay = new Date();
+      startOfDay.setHours(0, 0, 0, 0);
+
+      const endOfDay = new Date();
+      endOfDay.setHours(23, 59, 59, 999);
+
+      filters.callStart = { $gte: startOfDay, $lte: endOfDay };
     }
 
     if (search?.trim()) {
       const regex = new RegExp(escapeRegex(search.trim()), "i");
-      const accountManagerFilter =
-        req.user.role === LoginRole.ACCOUNT
-          ? { _id: req.user.sub, $or: [{ firstName: regex }, { lastName: regex }] }
-          : { $or: [{ firstName: regex }, { lastName: regex }] };
+      const normalizedSearchTo = normalizeToNumber(search.trim());
 
-      const matchingAccountManagers = await Account.find(accountManagerFilter).select(
-        "_id"
-      );
-      const matchingIds = matchingAccountManagers.map((account) => account._id);
+      const accountManagerFilter: Record<string, unknown> = {
+        $or: [{ firstName: regex }, { lastName: regex }],
+      };
 
-      if (!matchingIds.length) {
-        sendSuccess(res, 200, "Call logs fetched successfully", []);
-        return;
+      if (req.user.role === LoginRole.ACCOUNT) {
+        accountManagerFilter._id = req.user.sub;
       }
 
-      filters.calledBy = { $in: matchingIds };
+      const matchingAccountManagers = await Account.find(accountManagerFilter).select("_id");
+      const matchingIds = matchingAccountManagers.map((account) => account._id);
+
+      const orConditions: Array<Record<string, unknown>> = [
+        { to: { $regex: escapeRegex(normalizedSearchTo), $options: "i" } },
+      ];
+
+      if (matchingIds.length) {
+        orConditions.push({ calledBy: { $in: matchingIds } });
+      }
+
+      const baseAndFilters = filters.$and as Array<Record<string, unknown>> | undefined;
+      filters.$and = [...(baseAndFilters ?? []), { $or: orConditions }];
     }
 
-    const callLogs = await CallLog.find(filters)
-      .populate("calledBy", "firstName lastName uniqueId mobileNo")
-      .sort({ createdAt: -1 });
+    const [totalCount, callLogs] = await Promise.all([
+      CallLog.countDocuments(filters),
+      CallLog.find(filters)
+        .populate("calledBy", "firstName lastName uniqueId mobileNo")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(safeLimit),
+    ]);
 
-    sendSuccess(res, 200, "Call logs fetched successfully", callLogs);
+    sendSuccess(res, 200, "Call logs fetched successfully", {
+      data: callLogs,
+      pagination: {
+        total: totalCount,
+        page: pageNumber,
+        limit: safeLimit,
+        totalPages: Math.ceil(totalCount / safeLimit),
+      },
+      appliedFilters: {
+        search: search?.trim() ?? "",
+        callType: normalizedCallType ?? "",
+        dateFilter: normalizedDateFilter,
+      },
+    });
   } catch (error: unknown) {
     console.error("getAllCallLogs:", error);
     sendError(res, 500, "Failed to fetch call logs");

@@ -130,3 +130,162 @@ export const createAccountManagerByAdmin = async (
     sendError(res, 500, "Failed to create account manager");
   }
 };
+
+export const getAllAccountManagersByAdmin = async (
+  req: AuthenticatedRequest,
+  res: Response
+): Promise<void> => {
+  try {
+    if (!req.user?.sub) {
+      sendError(res, 401, "Unauthorized");
+      return;
+    }
+
+    const { page, limit, search, status } = req.query as {
+      page?: string;
+      limit?: string;
+      search?: string;
+      status?: string;
+    };
+    const pageNumber = Number(page ?? 1);
+    const limitNumber = Number(limit ?? 10);
+
+    if (
+      !Number.isInteger(pageNumber) ||
+      pageNumber < 1 ||
+      !Number.isInteger(limitNumber) ||
+      limitNumber < 1
+    ) {
+      sendError(res, 400, "page and limit must be positive integers");
+      return;
+    }
+
+    const safeLimit = Math.min(limitNumber, 100);
+    const skip = (pageNumber - 1) * safeLimit;
+
+    const normalizedStatus = status?.trim().toUpperCase();
+    if (
+      normalizedStatus &&
+      !Object.values(AccountStatus).includes(normalizedStatus as AccountStatus)
+    ) {
+      sendError(res, 400, "status must be ACTIVE or INACTIVE");
+      return;
+    }
+
+    const escapedSearch = search?.trim()
+      ? search.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+      : "";
+    const searchRegex = escapedSearch ? new RegExp(escapedSearch, "i") : null;
+
+    const matchStage: Record<string, unknown> = {};
+    if (normalizedStatus) {
+      matchStage["login.status"] = normalizedStatus;
+    }
+
+    if (searchRegex) {
+      matchStage.$or = [
+        { firstName: searchRegex },
+        { lastName: searchRegex },
+        { "login.email": searchRegex },
+        { mobileNo: searchRegex },
+      ];
+    }
+
+    const basePipeline = [
+      {
+        $lookup: {
+          from: "loginmappings",
+          localField: "loginMapping",
+          foreignField: "_id",
+          as: "login",
+        },
+      },
+      { $unwind: "$login" },
+      {
+        $lookup: {
+          from: "admins",
+          localField: "createdBy",
+          foreignField: "_id",
+          as: "creatorAdmin",
+        },
+      },
+      {
+        $unwind: {
+          path: "$creatorAdmin",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+      ...(Object.keys(matchStage).length ? [{ $match: matchStage }] : []),
+    ];
+
+    const [countResult, items] = await Promise.all([
+      Account.aggregate([...basePipeline, { $count: "total" }]),
+      Account.aggregate([
+        ...basePipeline,
+        { $sort: { createdAt: -1 } },
+        { $skip: skip },
+        { $limit: safeLimit },
+        {
+          $project: {
+            _id: 1,
+            uniqueId: 1,
+            firstName: 1,
+            lastName: 1,
+            mobileNo: 1,
+            email: "$login.email",
+            status: "$login.status",
+            role: "$login.role",
+            createdBy: {
+              id: "$creatorAdmin._id",
+              fullName: {
+                $trim: {
+                  input: {
+                    $concat: [
+                      { $ifNull: ["$creatorAdmin.firstName", ""] },
+                      " ",
+                      { $ifNull: ["$creatorAdmin.lastName", ""] },
+                    ],
+                  },
+                },
+              },
+              mobileNo: "$creatorAdmin.mobileNo",
+            },
+          },
+        },
+      ]),
+    ]);
+
+    const total = countResult[0]?.total ?? 0;
+
+    const formattedItems = items.map((item) => ({
+      id: item._id,
+      uniqueId: item.uniqueId,
+      firstName: item.firstName,
+      lastName: item.lastName,
+      mobileNo: item.mobileNo,
+      email: item.email ?? "",
+      status: item.status ?? "",
+      role: item.role ?? "",
+      createdBy: item.createdBy?.id
+        ? {
+            id: String(item.createdBy.id),
+            fullName: item.createdBy.fullName ?? "",
+            mobileNo: item.createdBy.mobileNo ?? "",
+          }
+        : null,
+    }));
+
+    sendSuccess(res, 200, "Account managers fetched successfully", {
+      items: formattedItems,
+      pagination: {
+        total,
+        page: pageNumber,
+        limit: safeLimit,
+        totalPages: Math.ceil(total / safeLimit),
+      },
+    });
+  } catch (error: unknown) {
+    console.error("getAllAccountManagersByAdmin:", error);
+    sendError(res, 500, "Failed to fetch account managers");
+  }
+};

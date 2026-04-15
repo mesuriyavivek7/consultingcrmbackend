@@ -1,6 +1,9 @@
 import { Router } from "express";
-import { registerAdmin } from "../controller/admin.controller";
-import { createAccountManagerByAdmin } from "../controller/account.controller";
+import { getAdminDashboard, registerAdmin } from "../controller/admin.controller";
+import {
+  createAccountManagerByAdmin,
+  getAllAccountManagersByAdmin,
+} from "../controller/account.controller";
 import { requireRole, verifyAccessToken } from "../middleware/auth.middleware";
 import { LoginRole } from "../models/loginmapping.model";
 
@@ -12,6 +15,18 @@ router.post(
   verifyAccessToken,
   requireRole(LoginRole.ADMIN),
   createAccountManagerByAdmin
+);
+router.get(
+  "/account-manager",
+  verifyAccessToken,
+  requireRole(LoginRole.ADMIN),
+  getAllAccountManagersByAdmin
+);
+router.get(
+  "/dashboard",
+  verifyAccessToken,
+  requireRole(LoginRole.ADMIN),
+  getAdminDashboard
 );
 
 export default router;
