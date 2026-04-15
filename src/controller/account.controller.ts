@@ -194,6 +194,7 @@ export const getAllAccountManagersByAdmin = async (
     }
 
     const basePipeline = [
+      { $match: { deletedAt: null } },
       {
         $lookup: {
           from: "loginmappings",
@@ -318,6 +319,97 @@ const getStartOfCurrentWeek = (date: Date): Date => {
 };
 
 export const getAccountManagerDashboard = async (
+export const updateAccountManagerByAdmin = async (
+  req: AuthenticatedRequest,
+  res: Response
+): Promise<void> => {
+  try {
+    if (!req.user?.sub) {
+      sendError(res, 401, "Unauthorized");
+      return;
+    }
+
+    const id = req.params.id as string;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      sendError(res, 400, "Invalid account manager ID");
+      return;
+    }
+
+    const { firstName, lastName, mobileNo, email, status } = req.body as {
+      firstName?: string;
+      lastName?: string;
+      mobileNo?: string;
+      email?: string;
+      status?: AccountStatus;
+    };
+
+    if (!firstName?.trim() && !lastName?.trim() && !mobileNo?.trim() && !email?.trim() && !status) {
+      sendError(res, 400, "At least one field (firstName, lastName, mobileNo, email, status) is required");
+      return;
+    }
+
+    if (status && !Object.values(AccountStatus).includes(status)) {
+      sendError(res, 400, "status must be ACTIVE or INACTIVE");
+      return;
+    }
+
+    const accountManager = await Account.findOne({ _id: id, deletedAt: null });
+    if (!accountManager) {
+      sendError(res, 404, "Account manager not found");
+      return;
+    }
+
+    if (firstName?.trim()) accountManager.firstName = firstName.trim();
+    if (lastName?.trim()) accountManager.lastName = lastName.trim();
+    if (mobileNo?.trim()) accountManager.mobileNo = mobileNo.trim();
+    await accountManager.save();
+
+    const loginMappingUpdates: Record<string, string> = {};
+
+    if (email?.trim()) {
+      const normalizedEmail = email.toLowerCase().trim();
+      const duplicate = await LoginMapping.findOne({
+        email: normalizedEmail,
+        _id: { $ne: accountManager.loginMapping },
+      });
+      if (duplicate) {
+        sendError(res, 409, "Email is already registered");
+        return;
+      }
+      loginMappingUpdates.email = normalizedEmail;
+    }
+
+    if (status) {
+      loginMappingUpdates.status = status;
+    }
+
+    if (Object.keys(loginMappingUpdates).length) {
+      await LoginMapping.findByIdAndUpdate(accountManager.loginMapping, loginMappingUpdates);
+    }
+
+    const loginMapping = await LoginMapping.findById(accountManager.loginMapping);
+
+    sendSuccess(res, 200, "Account manager updated successfully", {
+      id: accountManager._id,
+      uniqueId: accountManager.uniqueId,
+      firstName: accountManager.firstName,
+      lastName: accountManager.lastName,
+      mobileNo: accountManager.mobileNo,
+      email: loginMapping?.email ?? "",
+      role: loginMapping?.role ?? "",
+      status: loginMapping?.status ?? "",
+    });
+  } catch (error: unknown) {
+    if (error instanceof Error && error.name === "ValidationError") {
+      sendError(res, 400, error.message);
+      return;
+    }
+    console.error("updateAccountManagerByAdmin:", error);
+    sendError(res, 500, "Failed to update account manager");
+  }
+};
+
+export const toggleAccountManagerStatusByAdmin = async (
   req: AuthenticatedRequest,
   res: Response
 ): Promise<void> => {
@@ -443,6 +535,49 @@ export const getAccountManagerDashboard = async (
 };
 
 export const getAccountManagerCallLogs = async (
+    const id = req.params.id as string;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      sendError(res, 400, "Invalid account manager ID");
+      return;
+    }
+
+    const { status } = req.body as { status?: AccountStatus };
+    if (!status || !Object.values(AccountStatus).includes(status)) {
+      sendError(res, 400, "status must be ACTIVE or INACTIVE");
+      return;
+    }
+
+    const accountManager = await Account.findOne({ _id: id, deletedAt: null });
+    if (!accountManager) {
+      sendError(res, 404, "Account manager not found");
+      return;
+    }
+
+    const loginMapping = await LoginMapping.findByIdAndUpdate(
+      accountManager.loginMapping,
+      { status },
+      { new: true }
+    );
+
+    if (!loginMapping) {
+      sendError(res, 404, "Login mapping not found for this account manager");
+      return;
+    }
+
+    sendSuccess(res, 200, "Account manager status updated successfully", {
+      id: accountManager._id,
+      uniqueId: accountManager.uniqueId,
+      firstName: accountManager.firstName,
+      lastName: accountManager.lastName,
+      status: loginMapping.status,
+    });
+  } catch (error: unknown) {
+    console.error("toggleAccountManagerStatusByAdmin:", error);
+    sendError(res, 500, "Failed to update account manager status");
+  }
+};
+
+export const deleteAccountManagerByAdmin = async (
   req: AuthenticatedRequest,
   res: Response
 ): Promise<void> => {
@@ -452,46 +587,24 @@ export const getAccountManagerCallLogs = async (
       return;
     }
 
-    const { page, limit } = req.query as {
-      page?: string;
-      limit?: string;
-    };
-
-    const pageNumber = Number(page ?? 1);
-    const limitNumber = Number(limit ?? 10);
-
-    if (!Number.isInteger(pageNumber) || pageNumber < 1 || !Number.isInteger(limitNumber) || limitNumber < 1) {
-      sendError(res, 400, "page and limit must be positive integers");
+    const id = req.params.id as string;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      sendError(res, 400, "Invalid account manager ID");
       return;
     }
 
-    const safeLimit = Math.min(limitNumber, 100);
-    const skip = (pageNumber - 1) * safeLimit;
+    const accountManager = await Account.findOne({ _id: id, deletedAt: null });
+    if (!accountManager) {
+      sendError(res, 404, "Account manager not found");
+      return;
+    }
 
-    const accountId = new Types.ObjectId(req.user.sub);
-    const query: Record<string, unknown> = { calledBy: accountId };
+    accountManager.deletedAt = new Date();
+    await accountManager.save();
 
-    const [total, items] = await Promise.all([
-      CallLog.countDocuments(query),
-      CallLog.find(query)
-        .sort({ callStart: -1 })
-        .skip(skip)
-        .limit(safeLimit)
-        .populate("calledBy", "firstName lastName mobileNo uniqueId")
-        .lean(),
-    ]);
-
-    sendSuccess(res, 200, "Call logs fetched successfully", {
-      items,
-      pagination: {
-        total,
-        page: pageNumber,
-        limit: safeLimit,
-        totalPages: Math.ceil(total / safeLimit),
-      },
-    });
+    sendSuccess(res, 200, "Account manager deleted successfully", null);
   } catch (error: unknown) {
-    console.error("getAccountManagerCallLogs:", error);
-    sendError(res, 500, "Failed to fetch call logs");
+    console.error("deleteAccountManagerByAdmin:", error);
+    sendError(res, 500, "Failed to delete account manager");
   }
 };

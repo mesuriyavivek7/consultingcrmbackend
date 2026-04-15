@@ -23,6 +23,6 @@ RUN pnpm install --frozen-lockfile --prod
 
 COPY --from=builder /app/dist ./dist
 
-EXPOSE 5000
+EXPOSE 5060
 
 CMD ["pnpm", "start"]
