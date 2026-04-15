@@ -6,9 +6,9 @@ services:
     container_name: consultingcrm-api
     restart: unless-stopped
     ports:
-      - "5090:5090"
+      - "5060:5060"
     environment:
-      PORT: 5090
+      PORT: 5060
       MONGO_URL: ${MONGO_URL}
       JWT_SECRET: ${JWT_SECRET}
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}

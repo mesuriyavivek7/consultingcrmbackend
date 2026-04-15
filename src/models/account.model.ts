@@ -10,6 +10,7 @@ export interface IAccount extends Document {
   uniqueId: string;
   loginMapping: Types.ObjectId;
   createdBy: Types.ObjectId;
+  deletedAt: Date | null;
 }
 
 const accountSchema = new Schema<IAccount>(
@@ -46,6 +47,10 @@ const accountSchema = new Schema<IAccount>(
       type: Schema.Types.ObjectId,
       ref: "Admin",
       required: [true, "Created by admin is required"],
+    },
+    deletedAt: {
+      type: Date,
+      default: null,
     },
   },
   { timestamps: true }
