@@ -3,6 +3,7 @@ import cors from "cors";
 import adminRoutes from "./routes/admin.routes";
 import authRoutes from "./routes/auth.routes";
 import callLogRoutes from "./routes/calllog.routes";
+import accountRoutes from "./routes/account.routes";
 
 const app = express();
 
@@ -16,5 +17,6 @@ app.get("/", (req, res) => {
 app.use("/api/v1/admin", adminRoutes);
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/call-logs", callLogRoutes);
+app.use("/api/v1/account", accountRoutes);
 
-export default app;
+export default app;

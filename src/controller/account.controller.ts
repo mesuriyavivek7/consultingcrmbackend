@@ -4,8 +4,9 @@ import LoginMapping, {
   AccountStatus,
   LoginRole,
 } from "../models/loginmapping.model";
+import CallLog from "../models/calllog.model";
 import { sendError, sendSuccess } from "../utils/apiResponse";
-import { hashPassword } from "../utils/password";
+import { hashPassword, verifyPassword } from "../utils/password";
 import { AuthenticatedRequest } from "../middleware/auth.middleware";
 
 const generateSixDigitId = (): string =>
@@ -289,3 +290,319 @@ export const getAllAccountManagersByAdmin = async (
     sendError(res, 500, "Failed to fetch account managers");
   }
 };
+
+// ─── Account Manager Self-Service Controllers ────────────────────────────────
+
+const AM_TARGET_CALLS_PER_DAY = 250;
+
+const WEEK_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const MONTH_LABELS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+const getStartOfDay = (date: Date): Date => {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return d;
+};
+const getEndOfDay = (date: Date): Date => {
+  const d = new Date(date);
+  d.setHours(23, 59, 59, 999);
+  return d;
+};
+const getStartOfCurrentWeek = (date: Date): Date => {
+  const day = date.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  const monday = new Date(date);
+  monday.setDate(date.getDate() + diff);
+  monday.setHours(0, 0, 0, 0);
+  return monday;
+};
+
+export const getAccountManagerDashboard = async (
+  req: AuthenticatedRequest,
+  res: Response
+): Promise<void> => {
+  try {
+    if (!req.user?.sub) {
+      sendError(res, 401, "Unauthorized");
+      return;
+    }
+
+    const account = await Account.findById(req.user.sub).populate(
+      "loginMapping",
+      "email"
+    );
+    if (!account) {
+      sendError(res, 404, "Account manager profile not found");
+      return;
+    }
+
+    const now = new Date();
+    const startOfToday = getStartOfDay(now);
+    const endOfToday = getEndOfDay(now);
+
+    const startOfYesterday = new Date(startOfToday);
+    startOfYesterday.setDate(startOfYesterday.getDate() - 1);
+    const endOfYesterday = new Date(endOfToday);
+    endOfYesterday.setDate(endOfYesterday.getDate() - 1);
+
+    const startOfWeek = getStartOfCurrentWeek(now);
+    const endOfWeek = new Date(startOfWeek);
+    endOfWeek.setDate(startOfWeek.getDate() + 6);
+    endOfWeek.setHours(23, 59, 59, 999);
+
+    const startOfYear = new Date(now.getFullYear(), 0, 1, 0, 0, 0, 0);
+    const endOfYear = new Date(now.getFullYear(), 11, 31, 23, 59, 59, 999);
+
+    const accountId = account._id;
+
+    const [
+      todaysTotalCalls,
+      yesterdaysTotalCalls,
+      totalCallsOverall,
+      weeklyAggregation,
+      monthlyAggregation,
+    ] = await Promise.all([
+      CallLog.countDocuments({
+        calledBy: accountId,
+        callStart: { $gte: startOfToday, $lte: endOfToday },
+      }),
+      CallLog.countDocuments({
+        calledBy: accountId,
+        callStart: { $gte: startOfYesterday, $lte: endOfYesterday },
+      }),
+      CallLog.countDocuments({ calledBy: accountId }),
+      CallLog.aggregate([
+        {
+          $match: {
+            calledBy: accountId,
+            callStart: { $gte: startOfWeek, $lte: endOfWeek },
+          },
+        },
+        { $group: { _id: { $isoDayOfWeek: "$callStart" }, calls: { $sum: 1 } } },
+      ]),
+      CallLog.aggregate([
+        {
+          $match: {
+            calledBy: accountId,
+            callStart: { $gte: startOfYear, $lte: endOfYear },
+          },
+        },
+        { $group: { _id: { $month: "$callStart" }, calls: { $sum: 1 } } },
+      ]),
+    ]);
+
+    const weeklyMap = new Map<number, number>();
+    weeklyAggregation.forEach((e) => weeklyMap.set(Number(e._id), Number(e.calls)));
+
+    const monthlyMap = new Map<number, number>();
+    monthlyAggregation.forEach((e) => monthlyMap.set(Number(e._id), Number(e.calls)));
+
+    const weeklyData = WEEK_LABELS.map((label, i) => ({
+      label,
+      calls: weeklyMap.get(i + 1) ?? 0,
+    }));
+
+    const monthlyData = MONTH_LABELS.map((label, i) => ({
+      label,
+      calls: monthlyMap.get(i + 1) ?? 0,
+    }));
+
+    const progressPercentage =
+      AM_TARGET_CALLS_PER_DAY > 0
+        ? Number(((todaysTotalCalls / AM_TARGET_CALLS_PER_DAY) * 100).toFixed(2))
+        : 0;
+
+    const changeFromYesterdayPercent =
+      yesterdaysTotalCalls > 0
+        ? Number(
+            (
+              ((todaysTotalCalls - yesterdaysTotalCalls) / yesterdaysTotalCalls) *
+              100
+            ).toFixed(2)
+          )
+        : todaysTotalCalls > 0
+          ? 100
+          : 0;
+
+    const accountLogin = account.loginMapping as { email?: string } | null;
+
+    sendSuccess(res, 200, "Account manager dashboard fetched successfully", {
+      accountProfile: {
+        fullName: `${account.firstName} ${account.lastName}`.trim(),
+        email: accountLogin?.email ?? "",
+        mobileNo: account.mobileNo,
+        uniqueId: account.uniqueId,
+      },
+      metrics: {
+        todaysTotalCalls,
+        totalCallsOverall,
+      },
+      callAnalytics: {
+        weeklyData,
+        monthlyData,
+      },
+      todaysOverview: {
+        todaysTotalCalls,
+        targetCallsForToday: AM_TARGET_CALLS_PER_DAY,
+        progressPercentage: Math.min(progressPercentage, 100),
+        changeFromYesterdayPercent,
+      },
+    });
+  } catch (error: unknown) {
+    console.error("getAccountManagerDashboard:", error);
+    sendError(res, 500, "Failed to fetch account manager dashboard");
+  }
+};
+
+export const getAccountManagerProfile = async (
+  req: AuthenticatedRequest,
+  res: Response
+): Promise<void> => {
+  try {
+    if (!req.user?.sub) {
+      sendError(res, 401, "Unauthorized");
+      return;
+    }
+
+    const account = await Account.findById(req.user.sub).populate(
+      "loginMapping",
+      "email"
+    );
+    if (!account) {
+      sendError(res, 404, "Account manager not found");
+      return;
+    }
+
+    const login = account.loginMapping as { email?: string } | null;
+
+    sendSuccess(res, 200, "Profile fetched successfully", {
+      id: String(account._id),
+      firstName: account.firstName,
+      lastName: account.lastName,
+      mobileNo: account.mobileNo,
+      uniqueId: account.uniqueId,
+      email: login?.email ?? "",
+    });
+  } catch (error: unknown) {
+    console.error("getAccountManagerProfile:", error);
+    sendError(res, 500, "Failed to fetch profile");
+  }
+};
+
+export const updateAccountManagerProfile = async (
+  req: AuthenticatedRequest,
+  res: Response
+): Promise<void> => {
+  try {
+    if (!req.user?.sub) {
+      sendError(res, 401, "Unauthorized");
+      return;
+    }
+
+    const { firstName, lastName, mobileNo } = req.body as {
+      firstName?: string;
+      lastName?: string;
+      mobileNo?: string;
+    };
+
+    if (!firstName?.trim() && !lastName?.trim() && !mobileNo?.trim()) {
+      sendError(res, 400, "At least one field (firstName, lastName, mobileNo) is required");
+      return;
+    }
+
+    const account = await Account.findById(req.user.sub).populate(
+      "loginMapping",
+      "email"
+    );
+    if (!account) {
+      sendError(res, 404, "Account manager not found");
+      return;
+    }
+
+    if (firstName?.trim()) account.firstName = firstName.trim();
+    if (lastName?.trim()) account.lastName = lastName.trim();
+    if (mobileNo?.trim()) account.mobileNo = mobileNo.trim();
+
+    await account.save();
+
+    const login = account.loginMapping as { email?: string } | null;
+
+    sendSuccess(res, 200, "Profile updated successfully", {
+      id: String(account._id),
+      firstName: account.firstName,
+      lastName: account.lastName,
+      mobileNo: account.mobileNo,
+      uniqueId: account.uniqueId,
+      email: login?.email ?? "",
+    });
+  } catch (error: unknown) {
+    if (error instanceof Error && error.name === "ValidationError") {
+      sendError(res, 400, error.message);
+      return;
+    }
+    if (
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === 11000
+    ) {
+      sendError(res, 409, "Duplicate value (mobile number)");
+      return;
+    }
+    console.error("updateAccountManagerProfile:", error);
+    sendError(res, 500, "Failed to update profile");
+  }
+};
+
+export const changeAccountPassword = async (
+  req: AuthenticatedRequest,
+  res: Response
+): Promise<void> => {
+  try {
+    if (!req.user?.sub || !req.user.email) {
+      sendError(res, 401, "Unauthorized");
+      return;
+    }
+
+    const { currentPassword, newPassword } = req.body as {
+      currentPassword?: string;
+      newPassword?: string;
+    };
+
+    if (!currentPassword || !newPassword) {
+      sendError(res, 400, "currentPassword and newPassword are required");
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      sendError(res, 400, "New password must be at least 6 characters");
+      return;
+    }
+
+    const loginMapping = await LoginMapping.findOne({
+      email: req.user.email,
+      role: LoginRole.ACCOUNT,
+    });
+    if (!loginMapping) {
+      sendError(res, 404, "Login record not found");
+      return;
+    }
+
+    if (!verifyPassword(currentPassword, loginMapping.password)) {
+      sendError(res, 401, "Current password is incorrect");
+      return;
+    }
+
+    loginMapping.password = hashPassword(newPassword);
+    await loginMapping.save();
+
+    sendSuccess(res, 200, "Password changed successfully", null);
+  } catch (error: unknown) {
+    console.error("changeAccountPassword:", error);
+    sendError(res, 500, "Failed to change password");
+  }
+};
+
