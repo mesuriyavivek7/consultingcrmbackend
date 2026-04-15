@@ -1,5 +1,11 @@
 import { Router } from "express";
-import { getAdminDashboard, registerAdmin } from "../controller/admin.controller";
+import {
+  changeAdminPassword,
+  getAdminDashboard,
+  getAdminProfile,
+  registerAdmin,
+  updateAdminProfile,
+} from "../controller/admin.controller";
 import {
   createAccountManagerByAdmin,
   deleteAccountManagerByAdmin,
@@ -49,6 +55,24 @@ router.get(
   verifyAccessToken,
   requireRole(LoginRole.ADMIN),
   getAdminDashboard
+);
+router.get(
+  "/profile",
+  verifyAccessToken,
+  requireRole(LoginRole.ADMIN),
+  getAdminProfile
+);
+router.patch(
+  "/profile",
+  verifyAccessToken,
+  requireRole(LoginRole.ADMIN),
+  updateAdminProfile
+);
+router.patch(
+  "/change-password",
+  verifyAccessToken,
+  requireRole(LoginRole.ADMIN),
+  changeAdminPassword
 );
 router.get(
   "/settings",

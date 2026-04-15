@@ -9,7 +9,7 @@ import CallLog from "../models/calllog.model";
 import Settings from "../models/settings.model";
 import { AuthenticatedRequest } from "../middleware/auth.middleware";
 import { sendError, sendSuccess } from "../utils/apiResponse";
-import { hashPassword } from "../utils/password";
+import { hashPassword, verifyPassword } from "../utils/password";
 
 export const registerAdmin = async (
   req: Request,
@@ -262,5 +262,160 @@ export const getAdminDashboard = async (
   } catch (error: unknown) {
     console.error("getAdminDashboard:", error);
     sendError(res, 500, "Failed to fetch admin dashboard");
+  }
+};
+
+export const getAdminProfile = async (
+  req: AuthenticatedRequest,
+  res: Response
+): Promise<void> => {
+  try {
+    if (!req.user?.sub) {
+      sendError(res, 401, "Unauthorized");
+      return;
+    }
+
+    const admin = await Admin.findById(req.user.sub).populate<{
+      loginMapping: { email: string };
+    }>("loginMapping", "email");
+
+    if (!admin) {
+      sendError(res, 404, "Admin profile not found");
+      return;
+    }
+
+    sendSuccess(res, 200, "Admin profile fetched successfully", {
+      id: admin._id,
+      firstName: admin.firstName,
+      lastName: admin.lastName,
+      mobileNo: admin.mobileNo,
+      email: admin.loginMapping.email,
+    });
+  } catch (error: unknown) {
+    console.error("getAdminProfile:", error);
+    sendError(res, 500, "Failed to fetch admin profile");
+  }
+};
+
+export const updateAdminProfile = async (
+  req: AuthenticatedRequest,
+  res: Response
+): Promise<void> => {
+  try {
+    if (!req.user?.sub) {
+      sendError(res, 401, "Unauthorized");
+      return;
+    }
+
+    const { firstName, lastName, mobileNo, email } = req.body as {
+      firstName?: string;
+      lastName?: string;
+      mobileNo?: string;
+      email?: string;
+    };
+
+    if (!firstName?.trim() && !lastName?.trim() && !mobileNo?.trim() && !email?.trim()) {
+      sendError(res, 400, "At least one field (firstName, lastName, mobileNo, email) is required");
+      return;
+    }
+
+    const admin = await Admin.findById(req.user.sub);
+    if (!admin) {
+      sendError(res, 404, "Admin profile not found");
+      return;
+    }
+
+    if (firstName?.trim()) admin.firstName = firstName.trim();
+    if (lastName?.trim()) admin.lastName = lastName.trim();
+    if (mobileNo?.trim()) admin.mobileNo = mobileNo.trim();
+    await admin.save();
+
+    if (email?.trim()) {
+      const normalizedEmail = email.toLowerCase().trim();
+      const duplicate = await LoginMapping.findOne({
+        email: normalizedEmail,
+        _id: { $ne: admin.loginMapping },
+      });
+      if (duplicate) {
+        sendError(res, 409, "Email is already registered");
+        return;
+      }
+      await LoginMapping.findByIdAndUpdate(admin.loginMapping, { email: normalizedEmail });
+    }
+
+    const loginMapping = await LoginMapping.findById(admin.loginMapping);
+
+    sendSuccess(res, 200, "Admin profile updated successfully", {
+      id: admin._id,
+      firstName: admin.firstName,
+      lastName: admin.lastName,
+      mobileNo: admin.mobileNo,
+      email: loginMapping?.email ?? "",
+    });
+  } catch (error: unknown) {
+    if (error instanceof Error && error.name === "ValidationError") {
+      sendError(res, 400, error.message);
+      return;
+    }
+    console.error("updateAdminProfile:", error);
+    sendError(res, 500, "Failed to update admin profile");
+  }
+};
+
+export const changeAdminPassword = async (
+  req: AuthenticatedRequest,
+  res: Response
+): Promise<void> => {
+  try {
+    if (!req.user?.sub) {
+      sendError(res, 401, "Unauthorized");
+      return;
+    }
+
+    const { currentPassword, newPassword } = req.body as {
+      currentPassword?: string;
+      newPassword?: string;
+    };
+
+    if (!currentPassword || !newPassword) {
+      sendError(res, 400, "currentPassword and newPassword are required");
+      return;
+    }
+
+    if (newPassword.length < 8) {
+      sendError(res, 400, "newPassword must be at least 8 characters long");
+      return;
+    }
+
+    if (currentPassword === newPassword) {
+      sendError(res, 400, "newPassword must be different from currentPassword");
+      return;
+    }
+
+    const admin = await Admin.findById(req.user.sub);
+    if (!admin) {
+      sendError(res, 404, "Admin profile not found");
+      return;
+    }
+
+    const loginMapping = await LoginMapping.findById(admin.loginMapping);
+    if (!loginMapping) {
+      sendError(res, 404, "Login credentials not found");
+      return;
+    }
+
+    const isMatch = verifyPassword(currentPassword, loginMapping.password);
+    if (!isMatch) {
+      sendError(res, 401, "Current password is incorrect");
+      return;
+    }
+
+    loginMapping.password = hashPassword(newPassword);
+    await loginMapping.save();
+
+    sendSuccess(res, 200, "Password changed successfully", null);
+  } catch (error: unknown) {
+    console.error("changeAdminPassword:", error);
+    sendError(res, 500, "Failed to change password");
   }
 };
