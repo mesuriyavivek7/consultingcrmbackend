@@ -6,6 +6,7 @@ import LoginMapping, {
 import Admin from "../models/admin.model";
 import Account from "../models/account.model";
 import CallLog from "../models/calllog.model";
+import Settings from "../models/settings.model";
 import { AuthenticatedRequest } from "../middleware/auth.middleware";
 import { sendError, sendSuccess } from "../utils/apiResponse";
 import { hashPassword } from "../utils/password";
@@ -97,7 +98,7 @@ export const registerAdmin = async (
   }
 };
 
-const TARGET_CALLS_PER_ACCOUNT_MANAGER = 250;
+const DEFAULT_DAILY_CALL_TARGET = 250;
 const WEEK_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const MONTH_LABELS = [
   "Jan",
@@ -169,6 +170,7 @@ export const getAdminDashboard = async (
     const endOfYear = new Date(now.getFullYear(), 11, 31, 23, 59, 59, 999);
 
     const [
+      settings,
       totalAccountManagers,
       todaysTotalCalls,
       yesterdaysTotalCalls,
@@ -176,7 +178,8 @@ export const getAdminDashboard = async (
       weeklyAggregation,
       monthlyAggregation,
     ] = await Promise.all([
-      Account.countDocuments({}),
+      Settings.findOne(),
+      Account.countDocuments({ deletedAt: null }),
       CallLog.countDocuments({ callStart: { $gte: startOfToday, $lte: endOfToday } }),
       CallLog.countDocuments({
         callStart: { $gte: startOfYesterday, $lte: endOfYesterday },
@@ -212,7 +215,8 @@ export const getAdminDashboard = async (
       calls: monthlyMap.get(index + 1) ?? 0,
     }));
 
-    const targetCallsForToday = totalAccountManagers * TARGET_CALLS_PER_ACCOUNT_MANAGER;
+    const dailyCallTarget = settings?.dailyCallTarget ?? DEFAULT_DAILY_CALL_TARGET;
+    const targetCallsForToday = totalAccountManagers * dailyCallTarget;
     const progressPercentage =
       targetCallsForToday > 0
         ? Number(((todaysTotalCalls / targetCallsForToday) * 100).toFixed(2))
@@ -242,6 +246,7 @@ export const getAdminDashboard = async (
         todaysTotalCalls,
         totalCallsOverall,
         totalAccountManagers,
+        dailyCallTarget,
       },
       callAnalytics: {
         weeklyData,

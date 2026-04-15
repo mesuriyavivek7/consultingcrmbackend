@@ -1,4 +1,5 @@
 import { Response } from "express";
+import mongoose from "mongoose";
 import Account from "../models/account.model";
 import LoginMapping, {
   AccountStatus,
@@ -192,6 +193,7 @@ export const getAllAccountManagersByAdmin = async (
     }
 
     const basePipeline = [
+      { $match: { deletedAt: null } },
       {
         $lookup: {
           from: "loginmappings",
@@ -287,5 +289,179 @@ export const getAllAccountManagersByAdmin = async (
   } catch (error: unknown) {
     console.error("getAllAccountManagersByAdmin:", error);
     sendError(res, 500, "Failed to fetch account managers");
+  }
+};
+
+export const updateAccountManagerByAdmin = async (
+  req: AuthenticatedRequest,
+  res: Response
+): Promise<void> => {
+  try {
+    if (!req.user?.sub) {
+      sendError(res, 401, "Unauthorized");
+      return;
+    }
+
+    const id = req.params.id as string;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      sendError(res, 400, "Invalid account manager ID");
+      return;
+    }
+
+    const { firstName, lastName, mobileNo, email, status } = req.body as {
+      firstName?: string;
+      lastName?: string;
+      mobileNo?: string;
+      email?: string;
+      status?: AccountStatus;
+    };
+
+    if (!firstName?.trim() && !lastName?.trim() && !mobileNo?.trim() && !email?.trim() && !status) {
+      sendError(res, 400, "At least one field (firstName, lastName, mobileNo, email, status) is required");
+      return;
+    }
+
+    if (status && !Object.values(AccountStatus).includes(status)) {
+      sendError(res, 400, "status must be ACTIVE or INACTIVE");
+      return;
+    }
+
+    const accountManager = await Account.findOne({ _id: id, deletedAt: null });
+    if (!accountManager) {
+      sendError(res, 404, "Account manager not found");
+      return;
+    }
+
+    if (firstName?.trim()) accountManager.firstName = firstName.trim();
+    if (lastName?.trim()) accountManager.lastName = lastName.trim();
+    if (mobileNo?.trim()) accountManager.mobileNo = mobileNo.trim();
+    await accountManager.save();
+
+    const loginMappingUpdates: Record<string, string> = {};
+
+    if (email?.trim()) {
+      const normalizedEmail = email.toLowerCase().trim();
+      const duplicate = await LoginMapping.findOne({
+        email: normalizedEmail,
+        _id: { $ne: accountManager.loginMapping },
+      });
+      if (duplicate) {
+        sendError(res, 409, "Email is already registered");
+        return;
+      }
+      loginMappingUpdates.email = normalizedEmail;
+    }
+
+    if (status) {
+      loginMappingUpdates.status = status;
+    }
+
+    if (Object.keys(loginMappingUpdates).length) {
+      await LoginMapping.findByIdAndUpdate(accountManager.loginMapping, loginMappingUpdates);
+    }
+
+    const loginMapping = await LoginMapping.findById(accountManager.loginMapping);
+
+    sendSuccess(res, 200, "Account manager updated successfully", {
+      id: accountManager._id,
+      uniqueId: accountManager.uniqueId,
+      firstName: accountManager.firstName,
+      lastName: accountManager.lastName,
+      mobileNo: accountManager.mobileNo,
+      email: loginMapping?.email ?? "",
+      role: loginMapping?.role ?? "",
+      status: loginMapping?.status ?? "",
+    });
+  } catch (error: unknown) {
+    if (error instanceof Error && error.name === "ValidationError") {
+      sendError(res, 400, error.message);
+      return;
+    }
+    console.error("updateAccountManagerByAdmin:", error);
+    sendError(res, 500, "Failed to update account manager");
+  }
+};
+
+export const toggleAccountManagerStatusByAdmin = async (
+  req: AuthenticatedRequest,
+  res: Response
+): Promise<void> => {
+  try {
+    if (!req.user?.sub) {
+      sendError(res, 401, "Unauthorized");
+      return;
+    }
+
+    const id = req.params.id as string;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      sendError(res, 400, "Invalid account manager ID");
+      return;
+    }
+
+    const { status } = req.body as { status?: AccountStatus };
+    if (!status || !Object.values(AccountStatus).includes(status)) {
+      sendError(res, 400, "status must be ACTIVE or INACTIVE");
+      return;
+    }
+
+    const accountManager = await Account.findOne({ _id: id, deletedAt: null });
+    if (!accountManager) {
+      sendError(res, 404, "Account manager not found");
+      return;
+    }
+
+    const loginMapping = await LoginMapping.findByIdAndUpdate(
+      accountManager.loginMapping,
+      { status },
+      { new: true }
+    );
+
+    if (!loginMapping) {
+      sendError(res, 404, "Login mapping not found for this account manager");
+      return;
+    }
+
+    sendSuccess(res, 200, "Account manager status updated successfully", {
+      id: accountManager._id,
+      uniqueId: accountManager.uniqueId,
+      firstName: accountManager.firstName,
+      lastName: accountManager.lastName,
+      status: loginMapping.status,
+    });
+  } catch (error: unknown) {
+    console.error("toggleAccountManagerStatusByAdmin:", error);
+    sendError(res, 500, "Failed to update account manager status");
+  }
+};
+
+export const deleteAccountManagerByAdmin = async (
+  req: AuthenticatedRequest,
+  res: Response
+): Promise<void> => {
+  try {
+    if (!req.user?.sub) {
+      sendError(res, 401, "Unauthorized");
+      return;
+    }
+
+    const id = req.params.id as string;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      sendError(res, 400, "Invalid account manager ID");
+      return;
+    }
+
+    const accountManager = await Account.findOne({ _id: id, deletedAt: null });
+    if (!accountManager) {
+      sendError(res, 404, "Account manager not found");
+      return;
+    }
+
+    accountManager.deletedAt = new Date();
+    await accountManager.save();
+
+    sendSuccess(res, 200, "Account manager deleted successfully", null);
+  } catch (error: unknown) {
+    console.error("deleteAccountManagerByAdmin:", error);
+    sendError(res, 500, "Failed to delete account manager");
   }
 };
