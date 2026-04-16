@@ -194,6 +194,7 @@ export const getAllAccountManagersByAdmin = async (
     }
 
     const basePipeline = [
+      { $match: { deletedAt: null } },
       {
         $lookup: {
           from: "loginmappings",

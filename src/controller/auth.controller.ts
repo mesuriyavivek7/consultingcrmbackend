@@ -60,8 +60,8 @@ export const login = async (req: Request, res: Response): Promise<void> => {
 
     if (loginMapping.role === LoginRole.ACCOUNT) {
       const account = await Account.findOne({ loginMapping: loginMapping._id });
-      if (!account) {
-        sendError(res, 500, "Account profile not found for this account.");
+      if (!account || account.deletedAt !== null) {
+        sendError(res, 404, "Account not found.");
         return;
       }
 
