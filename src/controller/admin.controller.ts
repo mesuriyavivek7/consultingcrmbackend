@@ -169,6 +169,9 @@ export const getAdminDashboard = async (
     const startOfYear = new Date(now.getFullYear(), 0, 1, 0, 0, 0, 0);
     const endOfYear = new Date(now.getFullYear(), 11, 31, 23, 59, 59, 999);
 
+    const activeAccountManagers = await Account.find({ deletedAt: null }).select("_id");
+    const activeAccountManagerIds = activeAccountManagers.map((a) => a._id);
+
     const [
       settings,
       totalAccountManagers,
@@ -180,17 +183,31 @@ export const getAdminDashboard = async (
     ] = await Promise.all([
       Settings.findOne(),
       Account.countDocuments({ deletedAt: null }),
-      CallLog.countDocuments({ callStart: { $gte: startOfToday, $lte: endOfToday } }),
       CallLog.countDocuments({
+        calledBy: { $in: activeAccountManagerIds },
+        callStart: { $gte: startOfToday, $lte: endOfToday },
+      }),
+      CallLog.countDocuments({
+        calledBy: { $in: activeAccountManagerIds },
         callStart: { $gte: startOfYesterday, $lte: endOfYesterday },
       }),
-      CallLog.countDocuments({}),
+      CallLog.countDocuments({ calledBy: { $in: activeAccountManagerIds } }),
       CallLog.aggregate([
-        { $match: { callStart: { $gte: startOfWeek, $lte: endOfWeek } } },
+        {
+          $match: {
+            calledBy: { $in: activeAccountManagerIds },
+            callStart: { $gte: startOfWeek, $lte: endOfWeek },
+          },
+        },
         { $group: { _id: { $isoDayOfWeek: "$callStart" }, calls: { $sum: 1 } } },
       ]),
       CallLog.aggregate([
-        { $match: { callStart: { $gte: startOfYear, $lte: endOfYear } } },
+        {
+          $match: {
+            calledBy: { $in: activeAccountManagerIds },
+            callStart: { $gte: startOfYear, $lte: endOfYear },
+          },
+        },
         { $group: { _id: { $month: "$callStart" }, calls: { $sum: 1 } } },
       ]),
     ]);

@@ -78,6 +78,20 @@ export const createCallLog = async (
       return;
     }
 
+    const existingCallLog = await CallLog.findOne({
+      to: normalizedTo,
+      calledBy: accountManager._id,
+      callStart: startAt,
+      callEnd: endAt,
+      duration: durationInSeconds,
+      callType,
+    });
+
+    if (existingCallLog) {
+      sendSuccess(res, 201, "Call log already exists", existingCallLog);
+      return;
+    }
+
     const callLog = await CallLog.create({
       to: normalizedTo,
       calledBy: accountManager._id,
@@ -199,7 +213,7 @@ export const getAllCallLogs = async (
       CallLog.countDocuments(filters),
       CallLog.find(filters)
         .populate("calledBy", "firstName lastName uniqueId mobileNo")
-        .sort({ createdAt: -1 })
+        .sort({ callStart: -1 })
         .skip(skip)
         .limit(safeLimit),
     ]);
