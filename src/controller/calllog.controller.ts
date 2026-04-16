@@ -41,11 +41,15 @@ export const createCallLog = async (
       return;
     }
 
-    const normalizedTo = normalizeToNumber(to);
-    if (!/^\+\d{8,15}$/.test(normalizedTo)) {
-      sendError(res, 400, "to must be in +<countrycode><mobileno> format");
-      return;
-    }
+   let normalizedTo = to.replace(/\D/g, ""); // remove non-digits
+
+   if (normalizedTo.length === 10) {
+      normalizedTo = `+91${normalizedTo}`;
+   } else if (!to.startsWith("+")) {
+      normalizedTo = `+${normalizedTo}`;
+   } else {
+      normalizedTo = `+${normalizedTo}`;
+   }
 
     const startAt = new Date(callStart);
     const endAt = new Date(callEnd);
