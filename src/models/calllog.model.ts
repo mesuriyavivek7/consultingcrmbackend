@@ -15,12 +15,23 @@ export interface ICallLog extends Document {
 }
 
 const callLogSchema = new Schema<ICallLog>(
-  {
-    to: {
+    {
+      to: {
       type: String,
-      required: [true, "To number is required"],
-      trim: true,
-      match: [/^\+\d{8,15}$/, "To number must be in +<countrycode><mobileno> format"],
+      required: true,
+      set: (value: string) => {
+      let num = value.replace(/\D/g, ""); // remove non-digits
+
+      if (num.length === 10) {
+        return `+91${num}`; // assume India
+      }
+
+      if (!value.startsWith("+")) {
+        return `+${num}`;
+      }
+
+      return value;
+     },
     },
     calledBy: {
       type: Schema.Types.ObjectId,
