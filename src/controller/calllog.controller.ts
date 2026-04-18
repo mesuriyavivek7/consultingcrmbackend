@@ -188,6 +188,7 @@ export const getAllCallLogs = async (
 
       const accountManagerFilter: Record<string, unknown> = {
         $or: [{ firstName: regex }, { lastName: regex }],
+        deletedAt: null,
       };
 
       if (req.user.role === LoginRole.ACCOUNT) {

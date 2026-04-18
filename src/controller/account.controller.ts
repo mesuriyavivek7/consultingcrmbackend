@@ -221,6 +221,12 @@ export const getAllAccountManagersByAdmin = async (
       ...(Object.keys(matchStage).length ? [{ $match: matchStage }] : []),
     ];
 
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+
+    const endOfToday = new Date();
+    endOfToday.setHours(23, 59, 59, 999);
+
     const [countResult, items] = await Promise.all([
       Account.aggregate([...basePipeline, { $count: "total" }]),
       Account.aggregate([
@@ -228,6 +234,38 @@ export const getAllAccountManagersByAdmin = async (
         { $sort: { createdAt: -1 } },
         { $skip: skip },
         { $limit: safeLimit },
+        {
+          $lookup: {
+            from: "calllogs",
+            let: { accountId: "$_id" },
+            pipeline: [
+              { $match: { $expr: { $eq: ["$calledBy", "$$accountId"] } } },
+              { $count: "count" },
+            ],
+            as: "totalCallsData",
+          },
+        },
+        {
+          $lookup: {
+            from: "calllogs",
+            let: { accountId: "$_id" },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ["$calledBy", "$$accountId"] },
+                      { $gte: ["$callStart", startOfToday] },
+                      { $lte: ["$callStart", endOfToday] },
+                    ],
+                  },
+                },
+              },
+              { $count: "count" },
+            ],
+            as: "todaysCallsData",
+          },
+        },
         {
           $project: {
             _id: 1,
@@ -253,6 +291,12 @@ export const getAllAccountManagersByAdmin = async (
               },
               mobileNo: "$creatorAdmin.mobileNo",
             },
+            totalCallCount: {
+              $ifNull: [{ $arrayElemAt: ["$totalCallsData.count", 0] }, 0],
+            },
+            todaysCallCount: {
+              $ifNull: [{ $arrayElemAt: ["$todaysCallsData.count", 0] }, 0],
+            },
           },
         },
       ]),
@@ -276,6 +320,8 @@ export const getAllAccountManagersByAdmin = async (
             mobileNo: item.createdBy.mobileNo ?? "",
           }
         : null,
+      totalCallCount: item.totalCallCount ?? 0,
+      todaysCallCount: item.todaysCallCount ?? 0,
     }));
 
     sendSuccess(res, 200, "Account managers fetched successfully", {
