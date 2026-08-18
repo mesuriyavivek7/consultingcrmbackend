@@ -7,12 +7,14 @@ import {
   updateAdminProfile,
 } from "../controller/admin.controller";
 import {
+  changeAccountManagerPasswordByAdmin,
   createAccountManagerByAdmin,
   deleteAccountManagerByAdmin,
   getAllAccountManagersByAdmin,
   toggleAccountManagerStatusByAdmin,
   updateAccountManagerByAdmin,
 } from "../controller/account.controller";
+import { getAuditLogs } from "../controller/auditlog.controller";
 import { getSettings, updateSettings } from "../controller/settings.controller";
 import { requireRole, verifyAccessToken } from "../middleware/auth.middleware";
 import { LoginRole } from "../models/loginmapping.model";
@@ -44,6 +46,12 @@ router.patch(
   requireRole(LoginRole.ADMIN),
   toggleAccountManagerStatusByAdmin
 );
+router.patch(
+  "/account-manager/:id/password",
+  verifyAccessToken,
+  requireRole(LoginRole.ADMIN),
+  changeAccountManagerPasswordByAdmin
+);
 router.delete(
   "/account-manager/:id",
   verifyAccessToken,
@@ -73,6 +81,12 @@ router.patch(
   verifyAccessToken,
   requireRole(LoginRole.ADMIN),
   changeAdminPassword
+);
+router.get(
+  "/audit-logs",
+  verifyAccessToken,
+  requireRole(LoginRole.ADMIN),
+  getAuditLogs
 );
 router.get(
   "/settings",

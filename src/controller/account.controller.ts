@@ -429,6 +429,68 @@ export const updateAccountManagerByAdmin = async (
   }
 };
 
+/**
+ * Admin-initiated password reset. Deliberately does not ask for the current
+ * password — the admin is resetting on behalf of a manager who cannot sign in.
+ */
+export const changeAccountManagerPasswordByAdmin = async (
+  req: AuthenticatedRequest,
+  res: Response
+): Promise<void> => {
+  try {
+    if (!req.user?.sub) {
+      sendError(res, 401, "Unauthorized");
+      return;
+    }
+
+    const id = req.params.id as string;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      sendError(res, 400, "Invalid account manager ID");
+      return;
+    }
+
+    const { newPassword } = req.body as { newPassword?: string };
+
+    if (!newPassword) {
+      sendError(res, 400, "newPassword is required");
+      return;
+    }
+
+    if (newPassword.length < 8) {
+      sendError(res, 400, "New password must be at least 8 characters");
+      return;
+    }
+
+    const accountManager = await Account.findOne({ _id: id, deletedAt: null });
+    if (!accountManager) {
+      sendError(res, 404, "Account manager not found");
+      return;
+    }
+
+    const loginMapping = await LoginMapping.findById(
+      accountManager.loginMapping
+    );
+    if (!loginMapping) {
+      sendError(res, 404, "Login mapping not found for this account manager");
+      return;
+    }
+
+    loginMapping.password = hashPassword(newPassword);
+    await loginMapping.save();
+
+    sendSuccess(res, 200, "Password updated successfully", {
+      id: accountManager._id,
+      uniqueId: accountManager.uniqueId,
+      firstName: accountManager.firstName,
+      lastName: accountManager.lastName,
+      email: loginMapping.email,
+    });
+  } catch (error: unknown) {
+    console.error("changeAccountManagerPasswordByAdmin:", error);
+    sendError(res, 500, "Failed to update password");
+  }
+};
+
 export const toggleAccountManagerStatusByAdmin = async (
   req: AuthenticatedRequest,
   res: Response

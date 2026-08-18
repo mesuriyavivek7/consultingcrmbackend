@@ -3,6 +3,7 @@ import { Document, Schema, Types, model } from "mongoose";
 export enum CallType {
   INCOMING = "INCOMING",
   OUTGOING = "OUTGOING",
+  MISSED = "MISSED",
 }
 
 export interface ICallLog extends Document {
@@ -60,6 +61,11 @@ const callLogSchema = new Schema<ICallLog>(
   },
   { timestamps: true }
 );
+
+// Listings sort newest-first and are commonly narrowed to one account manager
+// and/or a date range.
+callLogSchema.index({ callStart: -1 });
+callLogSchema.index({ calledBy: 1, callStart: -1 });
 
 const CallLog = model<ICallLog>("CallLog", callLogSchema);
 

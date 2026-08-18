@@ -4,7 +4,13 @@ import Account from "../models/account.model";
 import CallLog, { CallType } from "../models/calllog.model";
 import { LoginRole } from "../models/loginmapping.model";
 import { AuthenticatedRequest } from "../middleware/auth.middleware";
+import { AuditOutcome } from "../models/auditlog.model";
 import { sendError, sendSuccess } from "../utils/apiResponse";
+import {
+  businessToday,
+  endOfBusinessDay,
+  startOfBusinessDay,
+} from "../utils/date";
 
 const normalizeToNumber = (value: string): string => value.replace(/\s+/g, "").trim();
 
@@ -88,6 +94,10 @@ export const createCallLog = async (
     });
 
     if (existingCallLog) {
+      res.locals.audit = {
+        outcome: AuditOutcome.DUPLICATE,
+        callLogId: existingCallLog._id,
+      };
       sendSuccess(res, 201, "Call log already exists", existingCallLog);
       return;
     }
@@ -101,6 +111,7 @@ export const createCallLog = async (
       callType,
     });
 
+    res.locals.audit = { callLogId: callLog._id };
     sendSuccess(res, 201, "Call log created successfully", callLog);
   } catch (error: unknown) {
     if (error instanceof Error && error.name === "ValidationError") {
@@ -123,10 +134,22 @@ export const getAllCallLogs = async (
       return;
     }
 
-    const { search, callType, dateFilter, page, limit } = req.query as {
+    const {
+      search,
+      callType,
+      dateFilter,
+      startDate,
+      endDate,
+      accountManagerId,
+      page,
+      limit,
+    } = req.query as {
       search?: string;
       callType?: string;
       dateFilter?: string;
+      startDate?: string;
+      endDate?: string;
+      accountManagerId?: string;
       page?: string;
       limit?: string;
     };
@@ -136,13 +159,45 @@ export const getAllCallLogs = async (
       normalizedCallType &&
       !Object.values(CallType).includes(normalizedCallType as CallType)
     ) {
-      sendError(res, 400, "callType must be INCOMING or OUTGOING");
+      sendError(res, 400, "callType must be INCOMING, OUTGOING or MISSED");
       return;
     }
 
     const normalizedDateFilter = dateFilter?.trim().toLowerCase() ?? "all";
     if (!["all", "today"].includes(normalizedDateFilter)) {
       sendError(res, 400, "dateFilter must be all or today");
+      return;
+    }
+
+    // A custom range takes precedence over the quick "today" shortcut; either
+    // bound may be omitted for an open-ended range, and passing the same date
+    // twice filters a single day.
+    const rawStartDate = startDate?.trim();
+    const rawEndDate = endDate?.trim();
+
+    const rangeStart = rawStartDate ? startOfBusinessDay(rawStartDate) : null;
+    if (rawStartDate && !rangeStart) {
+      sendError(res, 400, "startDate must be a valid YYYY-MM-DD date");
+      return;
+    }
+
+    const rangeEnd = rawEndDate ? endOfBusinessDay(rawEndDate) : null;
+    if (rawEndDate && !rangeEnd) {
+      sendError(res, 400, "endDate must be a valid YYYY-MM-DD date");
+      return;
+    }
+
+    if (rangeStart && rangeEnd && rangeStart > rangeEnd) {
+      sendError(res, 400, "startDate cannot be after endDate");
+      return;
+    }
+
+    const requestedAccountManagerId = accountManagerId?.trim();
+    if (
+      requestedAccountManagerId &&
+      !Types.ObjectId.isValid(requestedAccountManagerId)
+    ) {
+      sendError(res, 400, "accountManagerId must be a valid id");
       return;
     }
 
@@ -164,22 +219,29 @@ export const getAllCallLogs = async (
 
     const filters: Record<string, unknown> = {};
 
+    // Account managers only ever see their own calls; admins may narrow the
+    // list down to a single account manager.
     if (req.user.role === LoginRole.ACCOUNT) {
       filters.calledBy = req.user.sub;
+    } else if (requestedAccountManagerId) {
+      filters.calledBy = requestedAccountManagerId;
     }
 
     if (normalizedCallType) {
       filters.callType = normalizedCallType;
     }
 
-    if (normalizedDateFilter === "today") {
-      const startOfDay = new Date();
-      startOfDay.setHours(0, 0, 0, 0);
-
-      const endOfDay = new Date();
-      endOfDay.setHours(23, 59, 59, 999);
-
-      filters.callStart = { $gte: startOfDay, $lte: endOfDay };
+    if (rangeStart || rangeEnd) {
+      const range: Record<string, Date> = {};
+      if (rangeStart) range.$gte = rangeStart;
+      if (rangeEnd) range.$lte = rangeEnd;
+      filters.callStart = range;
+    } else if (normalizedDateFilter === "today") {
+      const today = businessToday();
+      filters.callStart = {
+        $gte: startOfBusinessDay(today) as Date,
+        $lte: endOfBusinessDay(today) as Date,
+      };
     }
 
     if (search?.trim()) {
@@ -231,6 +293,12 @@ export const getAllCallLogs = async (
         search: search?.trim() ?? "",
         callType: normalizedCallType ?? "",
         dateFilter: normalizedDateFilter,
+        startDate: rawStartDate ?? "",
+        endDate: rawEndDate ?? "",
+        accountManagerId:
+          req.user.role === LoginRole.ACCOUNT
+            ? req.user.sub
+            : requestedAccountManagerId ?? "",
       },
     });
   } catch (error: unknown) {
